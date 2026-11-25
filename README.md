@@ -9,7 +9,9 @@ python -m pip install -r requirements.txt
 python pptx2imgs.py "deck.pptx"
 ```
 
-The output is `deck-images.pptx`. Use `-o result.pptx --dpi 200` to choose a new file and change the default resolution of 150 DPI.
+The output is `deck-images.pptx`. Slides use lossless PNGs and render at 300 DPI or higher to retain detail from embedded images. PowerPoint's automatic image compression is disabled in the output.
+
+Use `-o result.pptx` to choose the output file and `--dpi 600` to set a fixed render resolution.
 
 On NixOS, run the converter inside `nix-shell -p libreoffice 'python3.withPackages (ps: [ ps.pymupdf ps.python-pptx ])'`.
 

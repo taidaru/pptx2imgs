@@ -1,2 +1,3 @@
+Pillow
 PyMuPDF>=1.24.3,<2
 python-pptx>=1,<2

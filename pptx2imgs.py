@@ -5,14 +5,17 @@ import shutil
 import subprocess
 import tempfile
 from io import BytesIO
+from math import ceil, hypot
 from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
 
+DEFAULT_DPI = 300
 PDF_FILTER = (
     'pdf:impress_pdf_Export:{"ExportHiddenSlides":{"type":"boolean","value":"true"},'
-    '"UseLosslessCompression":{"type":"boolean","value":"true"}}'
+    '"UseLosslessCompression":{"type":"boolean","value":"true"},'
+    '"ReduceImageResolution":{"type":"boolean","value":"false"}}'
 )
 
 
@@ -107,9 +110,21 @@ def save_presentation(presentation, output):
         raise
 
 
+def recommended_dpi(page):
+    dpi = DEFAULT_DPI
+    for image in page.get_image_info():
+        a, b, c, d, _, _ = image["transform"]
+        width = hypot(a, b)
+        height = hypot(c, d)
+        if width > 0 and height > 0:
+            dpi = max(dpi, ceil(72 * image["width"] / width), ceil(72 * image["height"] / height))
+    return dpi
+
+
 def convert(source, output, dpi):
     try:
         import pymupdf
+        from PIL import Image
         from pptx import Presentation
         from pptx.util import Pt
     except ImportError as error:
@@ -124,6 +139,7 @@ def convert(source, output, dpi):
     dimensions, hidden_slides = read_slide_properties(source)
     count = len(hidden_slides)
     presentation = Presentation()
+    presentation.element.set("autoCompressPictures", "0")
     blank = presentation.slide_layouts.get_by_name("Blank")
 
     libreoffice = find_libreoffice()
@@ -141,10 +157,18 @@ def convert(source, output, dpi):
             presentation.slide_height = height
 
             for page, hidden in zip(document, hidden_slides):
+                slide_dpi = recommended_dpi(page) if dpi is None else dpi
+                bounds = (page.rect * (slide_dpi / 72)).irect
+                max_pixels = Image.MAX_IMAGE_PIXELS
+                if max_pixels is not None and bounds.width * bounds.height > 2 * max_pixels:
+                    raise ConversionError(
+                        f"Slide {page.number + 1} at {slide_dpi} DPI exceeds the supported PNG size. "
+                        "Use --dpi to choose a lower resolution."
+                    )
                 slide = presentation.slides.add_slide(blank)
                 if hidden:
                     slide.element.set("show", "0")
-                png = BytesIO(page.get_pixmap(dpi=dpi).tobytes("png"))
+                png = BytesIO(page.get_pixmap(dpi=slide_dpi).tobytes("png"))
                 slide.shapes.add_picture(png, 0, 0, width, height)
 
     save_presentation(presentation, output)
@@ -155,13 +179,13 @@ def main():
     parser = argparse.ArgumentParser(description="Create a PPTX with one full-slide PNG per slide.")
     parser.add_argument("presentation", type=Path, help="Path to a .pptx file")
     parser.add_argument("-o", "--output", type=Path, help="Path to a new .pptx file")
-    parser.add_argument("--dpi", type=int, default=150, help="Image resolution (default: 150)")
+    parser.add_argument("--dpi", type=int, help=f"Fixed render resolution (default: adaptive, at least {DEFAULT_DPI})")
     args = parser.parse_args()
 
     source = args.presentation.expanduser().absolute()
     if source.suffix.lower() != ".pptx" or not source.is_file():
         parser.error(f"Expected an existing .pptx file: {source}")
-    if args.dpi <= 0:
+    if args.dpi is not None and args.dpi <= 0:
         parser.error("--dpi must be a positive integer")
 
     output = source.with_name(f"{source.stem}-images.pptx")
